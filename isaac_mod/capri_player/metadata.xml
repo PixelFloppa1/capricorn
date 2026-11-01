@@ -1,0 +1,8 @@
+<metadata>
+    <name>Capri Player</name>
+    <directory>capri_player</directory>
+    <id>3999000001</id>
+    <description>Пишет в log.txt состояние комнаты (игрок, враги, снаряды, двери), чтобы Капри могла играть. Ничего не меняет в игре.</description>
+    <version>1.0</version>
+    <visibility>Private</visibility>
+</metadata>

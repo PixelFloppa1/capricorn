@@ -21,6 +21,7 @@ import automation
 import commentary
 import freestyle
 import games
+import isaac
 import learning
 import media
 import persona
@@ -972,6 +973,9 @@ class Actions:
         persona.TOPIC_PROVIDERS.append(self.games.chatter_topics)
         self.routes = [
             (r"^(выход|выключись|отключись|заверши работу|завершить работу)$", self.quit),
+            (isaac.INSTALL_RE, self.isaac_install),
+            (isaac.STOP_PLAY_RE, lambda c, m: Reply(line("isaac_off"), "isaac:off")),
+            (isaac.PLAY_RE, lambda c, m: Reply(line("isaac_on"), "isaac:on")),
             (freestyle.ANYTIME_RE, self.anytime_toggle),    # раньше «комментируй» / «не комментируй»
             (freestyle.PROFANITY_RE, self.profanity_toggle),
             (freestyle.WALLPAPER_RE, lambda c, m: self.look_cmd("wallpaper")),
@@ -1288,6 +1292,11 @@ class Actions:
         """«не комментируй» / «комментируй меня»: включает и выключает подколки (само переключение делает main)."""
         off = commentary.toggle_wants_off(c)
         return Reply(line("commentary_off" if off else "commentary_on"), "commentary:" + ("off" if off else "on"))
+
+    def isaac_install(self, c, m):
+        src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "isaac_mod", "capri_player")
+        where, msg = isaac.install_mod(src, self.cfg.get("steam_path", ""))
+        return Reply(msg, None)
 
     def anytime_toggle(self, c, m):
         """«комментируй всё» / «выключи свободный режим» (само переключение делает main)."""

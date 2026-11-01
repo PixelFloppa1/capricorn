@@ -41,6 +41,7 @@ try:
     from actions import CAPRI_URL, Actions, Reply
     from ai import AI
     import effects
+    import isaac
     from commentary import TOGGLE_RE, Commentator, heard_laugh, heard_outcome
     from freestyle import ANYTIME_RE, PROFANITY_CONTEXT, PROFANITY_RE, NoVision, describe
     from games import GameTracker
@@ -74,6 +75,7 @@ DEFAULTS = {
     "steam_confirm": True,   # перед отправкой сообщения другу в Steam прочитать его вслух и ждать «да»
     "steam_friends": {},     # свои названия друзей: {"вася": "xX_Vasya_Xx"} (ник из Steam или числовой id)
     "steam_path": "",        # папка Steam, если автоопределение не сработало
+    "isaac_log": "",         # путь к log.txt Isaac, если автоопределение не нашло
     "animations": True,      # процедурные анимации: подпрыгивает от радости, дрожит от стёба
     "commentary": True,      # комментировать, что ты делаешь, и стебать за проигрыши
     "commentary_minutes": 6,   # не чаще раза в столько минут (комментарии про игры — вне этого лимита);
@@ -385,6 +387,32 @@ class Capri(QObject):
         if name and self.cfg.get("animations", True):
             self.fx.emit(name)
 
+    def start_isaac(self):
+        """Капри сама играет в Isaac: мод пишет состояние в log.txt, isaac.py жмёт клавиши."""
+        if getattr(self, "isaac", None) and self.isaac.on:
+            return True
+        def foreground():
+            try:
+                import ctypes
+                import automation
+                exe = automation.window_exe(ctypes.windll.user32.GetForegroundWindow())
+            except Exception:
+                return False
+            return bool(exe) and os.path.basename(exe).lower().startswith("isaac-ng")
+        self.isaac = isaac.IsaacPlayer(self.cfg.get("isaac_log") or None, foreground, self._on_isaac_event)
+        return self.isaac.start()
+
+    def stop_isaac(self):
+        if getattr(self, "isaac", None):
+            self.isaac.stop()
+
+    def _on_isaac_event(self, kind, detail=None):
+        """Смерть в забеге — стёб, босс убит — похвала (через обычные подколки, с их паузами)."""
+        found = self.commentator.outcome("loss" if kind == "death" else "win", {"t": "The Binding of Isaac"}) \
+            if kind in ("death", "boss") else None
+        if found:
+            self.jobs.put(("roast",) + found)
+
     def _on_comment(self, situation, detail):
         """Наблюдатель (его поток): подколку придумает рабочий поток, чтобы не стоять в ожидании нейросети."""
         self.jobs.put(("roast", situation, detail))
@@ -517,7 +545,7 @@ class Capri(QObject):
         cmd = self.strip_wake(text) if woke else text
         # «перестань меня стебать» — не «стоп», а настройка комментариев
         if (STOP_RE.match(cmd.strip()) and len(cmd.split()) <= 3
-                and not re.search(f"{TOGGLE_RE}|{PROFANITY_RE}|{ANYTIME_RE}", cmd.lower().replace("ё", "е"))):
+                and not re.search(f"{TOGGLE_RE}|{PROFANITY_RE}|{ANYTIME_RE}|{isaac.STOP_PLAY_RE.pattern}", cmd.lower().replace("ё", "е"))):
             # «Капри, стоп» — замолчать, остановить автопрокрутку и слушать дальше
             self.awake_until = now + self.cfg["listen_window_seconds"]
             if self.actions.stop_background():
@@ -770,6 +798,11 @@ class Capri(QObject):
             self.set_commentary(reply.action.endswith("on"))
         elif reply is not None and reply.action and reply.action.startswith("profanity:"):
             self.set_profanity(reply.action.endswith("on"))
+        elif reply is not None and reply.action in ("isaac:on", "isaac:off"):
+            if reply.action == "isaac:off":
+                self.stop_isaac()
+            elif not self.start_isaac():
+                reply = Reply(line("isaac_no_log"), None)
         elif reply is not None and reply.action and reply.action.startswith("anytime:"):
             self.set_anytime(reply.action.endswith("on"))
         if reply is None:
@@ -887,6 +920,7 @@ def main():
     capri.mode.connect(avatar.set_mode)
     capri.subtitle.connect(avatar.set_subtitle)
     capri.quit_app.connect(app.quit)
+    app.aboutToQuit.connect(capri.stop_isaac)    # отпустить клавиши при выходе
     capri.anim.connect(avatar.play_anim)
     capri.fx.connect(avatar.play_effect)
     capri.roam.connect(avatar.start_roam)
