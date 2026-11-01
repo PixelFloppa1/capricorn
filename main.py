@@ -40,6 +40,7 @@ try:
 
     from actions import CAPRI_URL, Actions, Reply
     from ai import AI
+    import boredom
     import effects
     import isaac
     from commentary import TOGGLE_RE, Commentator, heard_laugh, heard_outcome
@@ -75,6 +76,9 @@ DEFAULTS = {
     "steam_confirm": True,   # перед отправкой сообщения другу в Steam прочитать его вслух и ждать «да»
     "steam_friends": {},     # свои названия друзей: {"вася": "xX_Vasya_Xx"} (ник из Steam или числовой id)
     "steam_path": "",        # папка Steam, если автоопределение не сработало
+    "suggest_games": True,   # когда скучно, предлагать запустить игру или скачать новую (спросит, без «да» ничего не делает)
+    "suggest_min_minutes": 40,
+    "suggest_max_minutes": 90,
     "isaac_log": "",         # путь к log.txt Isaac, если автоопределение не нашло
     "animations": True,      # процедурные анимации: подпрыгивает от радости, дрожит от стёба
     "commentary": True,      # комментировать, что ты делаешь, и стебать за проигрыши
@@ -337,6 +341,8 @@ class Capri(QObject):
         if CONFIG_ERROR:
             self.jobs.put(("say", CONFIG_ERROR))
         threading.Thread(target=self._chatter_loop, daemon=True).start()  # сам проверяет, включено ли
+        self.suggester = boredom.Suggester(self.actions.games, self.cfg)
+        threading.Thread(target=self._boredom_loop, daemon=True).start()
         threading.Thread(target=self._prewarm_voice, daemon=True).start()
         if self.game_tracker:
             self.game_tracker.start()
@@ -459,6 +465,30 @@ class Capri(QObject):
             else:
                 due = now + 60  # занят или в игре/фильме — попробуем позже
 
+    def _boredom_loop(self):
+        """Если давно тихо — Капри предлагает во что-нибудь поиграть (редко, и только если ничего не идёт)."""
+        due = time.time() + boredom.due_delay(self.cfg)
+        while True:
+            time.sleep(30)
+            now = time.time()
+            if not self.cfg.get("suggest_games", True):
+                due = now + boredom.due_delay(self.cfg)
+                continue
+            if now < due:
+                continue
+            free = (now - self.last_activity > 300 and self.jobs.empty() and not self.speaking
+                    and not self.actions.pending and not self.actions.games.running()
+                    and not fullscreen_app_active())
+            if free:
+                self.jobs.put(("offer",))
+                due = now + boredom.due_delay(self.cfg)
+            else:
+                due = now + 120
+
+    def set_suggest(self, on):
+        self.cfg["suggest_games"] = bool(on)
+        save_setting("suggest_games", bool(on))
+
     def chatter_line(self):
         hour = time.localtime().tm_hour
         text = None
@@ -545,7 +575,7 @@ class Capri(QObject):
         cmd = self.strip_wake(text) if woke else text
         # «перестань меня стебать» — не «стоп», а настройка комментариев
         if (STOP_RE.match(cmd.strip()) and len(cmd.split()) <= 3
-                and not re.search(f"{TOGGLE_RE}|{PROFANITY_RE}|{ANYTIME_RE}|{isaac.STOP_PLAY_RE.pattern}", cmd.lower().replace("ё", "е"))):
+                and not re.search(f"{TOGGLE_RE}|{PROFANITY_RE}|{ANYTIME_RE}|{isaac.STOP_PLAY_RE.pattern}|{boredom.SUGGEST_OFF}", cmd.lower().replace("ё", "е"))):
             # «Капри, стоп» — замолчать, остановить автопрокрутку и слушать дальше
             self.awake_until = now + self.cfg["listen_window_seconds"]
             if self.actions.stop_background():
@@ -639,7 +669,7 @@ class Capri(QObject):
         for key in ("sites", "apps", "app_aliases", "search_when_unsure", "browser", "chatter", "replies",
                     "user_name_mode", "user_name", "user_gender", "commentary", "commentary_minutes",
                     "react_to_voice", "commentary_titles", "screen_reactions", "commentary_anytime",
-                    "commentary_wallpaper", "profanity", "steam_confirm",
+                    "commentary_wallpaper", "profanity", "steam_confirm", "suggest_games",
                     "steam_friends", "steam_path"):
             self.cfg[key] = fresh[key]
         self.actions.set_lists(self.cfg)
@@ -742,6 +772,16 @@ class Capri(QObject):
             if not self.say(text):
                 self.mode.emit("idle", 0.0)
             return
+        if kind == "offer":
+            sug = self.suggester.suggest()
+            if not sug:
+                return
+            self.actions.offer(sug, self.suggester.decline)
+            self.awake_until = time.time() + 25            # ответ «да» без имени
+            self.summon.emit()
+            if not self.say(sug.text):
+                self.mode.emit("idle", 0.0)
+            return
         if kind == "chatter":
             text = self.chatter_line()
             if random.random() < self.cfg.get("roam_chance", 0.5):
@@ -798,6 +838,8 @@ class Capri(QObject):
             self.set_commentary(reply.action.endswith("on"))
         elif reply is not None and reply.action and reply.action.startswith("profanity:"):
             self.set_profanity(reply.action.endswith("on"))
+        elif reply is not None and reply.action in ("suggest:on", "suggest:off"):
+            self.set_suggest(reply.action.endswith("on"))
         elif reply is not None and reply.action in ("isaac:on", "isaac:off"):
             if reply.action == "isaac:off":
                 self.stop_isaac()

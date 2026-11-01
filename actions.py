@@ -21,6 +21,7 @@ import automation
 import commentary
 import freestyle
 import games
+import boredom
 import isaac
 import learning
 import media
@@ -973,6 +974,8 @@ class Actions:
         persona.TOPIC_PROVIDERS.append(self.games.chatter_topics)
         self.routes = [
             (r"^(выход|выключись|отключись|заверши работу|завершить работу)$", self.quit),
+            (boredom.SUGGEST_OFF, lambda c, m: Reply(line("bored_off"), "suggest:off")),
+            (boredom.SUGGEST_RE, lambda c, m: Reply(line("bored_on"), "suggest:on")),
             (isaac.INSTALL_RE, self.isaac_install),
             (isaac.STOP_PLAY_RE, lambda c, m: Reply(line("isaac_off"), "isaac:off")),
             (isaac.PLAY_RE, lambda c, m: Reply(line("isaac_on"), "isaac:on")),
@@ -1091,6 +1094,9 @@ class Actions:
             if re.match(r"^(да|давай|подтверждаю|конечно|ага)\b", c):
                 return action()
             if re.match(r"^(нет|не надо|отмена|стоп)\b", c):
+                if hasattr(action, "decline"):       # отказ от предложения поиграть — запомним, чтобы не повторяла
+                    action.decline()
+                    return Reply(line("bored_no"))
                 return Reply(line("cancel"))
         if self.stop_background():  # любая новая команда останавливает автопрокрутку
             if re.match(r"^(стоп|хватит|стой|остановись|достаточно|перестань|харэ|все|всё)\b", c):
@@ -1483,6 +1489,24 @@ class Actions:
             return Reply(line("game_launch_fail", t=g["name"]))
         subprocess.Popen([g["exe"]], cwd=os.path.dirname(g["exe"]))
         return Reply(line("game_launch", t=g["name"]))
+
+    def offer(self, sug, on_decline=None):
+        """Капри сама предложила поиграть: ждём «да» (запустит игру или откроет страницу в Steam) или «нет»."""
+        def do():
+            if sug.kind == "launch":
+                g = self.games.get(sug.key)
+                if not g or not os.path.isfile(g["exe"]) or sug.key in self.games.active:
+                    return Reply(line("game_launch_fail", t=sug.name))
+                subprocess.Popen([g["exe"]], cwd=os.path.dirname(g["exe"]))
+                return Reply(line("bored_launching", t=sug.name))
+            self.web(sug.url)
+            return Reply(line("bored_opened"))
+
+        def decline():
+            if on_decline:
+                on_decline(sug.key)
+        do.decline = decline
+        self.pending = do
 
     def updates(self, c, m):
         """Страница Капри на GitHub — там новые версии."""
