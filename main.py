@@ -963,7 +963,7 @@ def main():
     capri.subtitle.connect(avatar.set_subtitle)
     capri.quit_app.connect(app.quit)
     app.aboutToQuit.connect(capri.stop_isaac)    # отпустить клавиши при выходе
-    capri.anim.connect(avatar.play_anim)
+    capri.anim.connect(lambda name: avatar.play_wave() if name == "capri" else avatar.play_anim(name))
     capri.fx.connect(avatar.play_effect)
     capri.roam.connect(avatar.start_roam)
     capri.hop.connect(avatar.start_hopping)

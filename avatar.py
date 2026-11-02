@@ -179,6 +179,10 @@ def load_custom(path, w, h):
 
 
 ANIM_FPS = 24
+IDLE_ANIMS = {"breathe": (6, 12), "sway": (7, 14), "float": (6, 12), "glitch": (1.2, 2.5)}   # имя: сколько секунд играет
+IDLE_WEIGHTS = {"breathe": 3, "sway": 3, "float": 2, "glitch": 1}
+IDLE_PAUSE = (14, 40)       # через сколько секунд простоя заиграет следующая петля
+WAVES = ("capri", "wave_mirror")    # взмах правой или левой рукой (wave_mirror делает tools/make_variants.py)
 TELE_OUT_FRAMES = 5      # сколько кадров Капри «сжимается» перед телепортом
 BOLT_MS = 380            # сколько живёт молния
 
@@ -470,6 +474,8 @@ class Avatar(QWidget):
         self.anims = load_anims(os.path.join(assets_dir, "anim"))
         self.anim = None             # имя проигрываемой анимации
         self.anim_start = 0.0
+        self.idle_until = 0.0
+        self.next_idle_anim = time.time() + random.uniform(*IDLE_PAUSE)
         self.fx = effects.Player(time.time)   # процедурные анимации (прыжок, дрожь…)
         self.anim_loop = False
 
@@ -647,6 +653,28 @@ class Avatar(QWidget):
             wait = max(0, APPEAR_FRAMES - self.k) / 30 if self.state == "appearing" else 0.0
             self.fx.play(name, wait)
 
+    def play_wave(self):
+        names = [n for n in WAVES if n in self.anims]
+        if names:
+            self.play_anim(random.choice(names))
+
+    def _idle_anims_step(self, now):
+        """Пока она молчит и стоит на месте, иногда играет петля: дыхание, покачивание, парение или глитч."""
+        if self.anim in IDLE_ANIMS and (now > self.idle_until or self.mode != "idle" or self.roaming):
+            self.anim = None
+            self.next_idle_anim = now + random.uniform(*IDLE_PAUSE)
+            return
+        if (self.anim is None and self.state == "visible" and self.mode == "idle" and not self.roaming
+                and not self.hopping and self.tele_target is None and now > self.next_idle_anim):
+            names = [n for n in IDLE_ANIMS if n in self.anims]
+            if not names:
+                self.next_idle_anim = now + 60
+                return
+            name = random.choices(names, [IDLE_WEIGHTS.get(n, 1) for n in names])[0]
+            self.play_anim(name, loop=True)
+            self.idle_until = now + random.uniform(*IDLE_ANIMS[name])
+            self.burst, self.burst_level = 3, .8            # короткий глитч при смене картинки
+
     def set_mode(self, mode, seconds=0.0):
         if mode == "thinking" and self.mode != "thinking":
             self.play_anim("eyes", loop=True)
@@ -685,6 +713,7 @@ class Avatar(QWidget):
             return
         if self.mode_until and now > self.mode_until:
             self.set_mode("idle")
+        self._idle_anims_step(now)
         if self.roaming:
             self._roam_step(now)
         elif self._tele_step(now):
